@@ -24,6 +24,8 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Source indexing rejects symlinks whose canonical target escapes the site.
 - Watch refreshes invalidate resolved in-memory entries.
 - Explicit Inspector presets use their own default `sizes` value.
+- Source lookup treats canonically equivalent Unicode paths as the same path,
+  avoiding cross-platform NFC/NFD filename mismatches.
 
 ## [0.1.1] - 2026-05-19
 

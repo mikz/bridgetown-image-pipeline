@@ -68,7 +68,7 @@ module Bridgetown
         value = src.to_s.split(/[?#]/, 2).first
         return if value.empty? || value.start_with?("//") || value.match?(/\A[a-z][a-z0-9+.-]*:/i)
 
-        value = URI::RFC2396_PARSER.unescape(value)
+        value = URI::RFC2396_PARSER.unescape(value).unicode_normalize(:nfc)
         return unless value.start_with?("/")
         return if value.split("/").include?("..")
 
@@ -79,7 +79,7 @@ module Bridgetown
 
       def public_src(absolute_path)
         relative = absolute_path.delete_prefix("#{@root_dir}/")
-        "/#{relative.sub(%r{\Asrc/}, "")}"
+        "/#{relative.sub(%r{\Asrc/}, "")}".unicode_normalize(:nfc)
       end
 
       def canonical_source(path)

@@ -181,6 +181,20 @@ class PipelineTest < Minitest::Test
     assert_includes second[:variants].first[:path], "/img/nested/same.webp/content/"
   end
 
+  def test_source_lookup_accepts_canonically_equivalent_unicode_paths
+    decomposed_name = "cafe\u0301.jpg"
+    FileUtils.cp(
+      File.expand_path("fixtures/test-image.jpg", __dir__),
+      File.join(@tmp, "src", "img", decomposed_name)
+    )
+    @pipeline.refresh
+
+    entry = @pipeline.resolve("/img/café.jpg", preset: :content)
+
+    refute_nil entry
+    assert(entry[:variants].all? { |variant| variant[:path].include?("/img/café.jpg/content/") })
+  end
+
   def test_unknown_external_and_traversal_sources_are_ignored
     assert_nil @pipeline.resolve("https://example.com/image.jpg")
     assert_nil @pipeline.resolve("/img/../secret.jpg")
