@@ -29,6 +29,8 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Background helpers quote and escape URLs containing spaces or quotes.
 - Explicit picture widths derive a proportional intrinsic height unless a
   height is supplied.
+- Inspector-managed images keep preset `sizes` when the source format is also
+  the only configured modern format.
 
 ## [0.1.1] - 2026-05-19
 

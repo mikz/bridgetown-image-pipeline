@@ -76,11 +76,11 @@ module Bridgetown
       def ensure_img_srcset(img, entry, preset)
         return if img["srcset"]
 
+        img["sizes"] ||= @config.preset(preset)[:default_sizes] || "100vw"
         fallback = entry[:variants].reject { |v| %i[avif webp].include?(v[:format]) }
         return if fallback.empty?
 
         img["srcset"] = fallback.map { |v| "#{v[:path]} #{v[:width]}w" }.join(", ")
-        img["sizes"] ||= @config.preset(preset)[:default_sizes] || "100vw"
         smallest = fallback.min_by { |v| v[:width] }
         img["src"] = smallest[:path] if smallest
       end

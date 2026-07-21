@@ -454,6 +454,23 @@ class InspectorTest < Minitest::Test
     assert_includes output, 'sizes="96px"'
   end
 
+  def test_explicit_preset_keeps_sizes_without_a_separate_fallback_format
+    webp_entry = ImagePipelineTestData.entry.merge(
+      variants: ImagePipelineTestData.entry[:variants].select { |variant| variant[:format] == :webp }
+    )
+    inspector = Bridgetown::ImagePipeline::Inspector.new(
+      pipeline: FakePipeline.new([[["/images/known.webp", :avatar], webp_entry]].to_h),
+      config: @config
+    )
+
+    output = inspector.rewrite(
+      '<html><body><img src="/images/known.webp" data-image-preset="avatar"></body></html>'
+    )
+
+    assert_includes output, 'sizes="96px"'
+    refute_includes output, "data-image-preset"
+  end
+
   def test_preserves_author_loading_and_priority_attributes
     output = @inspector.rewrite(
       '<html><body><img src="/images/known.jpg" loading="eager" decoding="sync" fetchpriority="high"></body></html>'
