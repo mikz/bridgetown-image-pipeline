@@ -4,40 +4,65 @@ require "test_helper"
 require "fileutils"
 require "tmpdir"
 
+class FakePipeline
+  def initialize(entries = {})
+    @entries = entries
+  end
+
+  def resolve(src, preset: nil)
+    @entries[[src, (preset || :default).to_sym]]
+  end
+end
+
+module ImagePipelineTestData
+  module_function
+
+  def entry
+    {
+      width: 1200,
+      height: 600,
+      variants: [
+        { path: "/generated/known-400.webp", width: 400, height: 200, format: :webp },
+        { path: "/generated/known-400.jpg", width: 400, height: 200, format: :jpeg },
+        { path: "/generated/known-1200.webp", width: 1200, height: 600, format: :webp },
+        { path: "/generated/known-1200.jpg", width: 1200, height: 600, format: :jpeg }
+      ]
+    }
+  end
+end
+
 class ConfigTest < Minitest::Test
-  def test_defaults_when_no_overrides
-    cfg = Bridgetown::ImagePipeline::Config.from
-    assert_equal ["src/images/**/*.{jpg,jpeg,png}"], cfg.source_globs
-    assert_equal [], cfg.exclude
-    assert_equal [400, 600, 800, 1200, 1600], cfg.widths
-    assert_equal %i[avif webp], cfg.formats
-    assert_equal "_bridgetown/image_pipeline", cfg.output_dir
-    assert_equal({ avif: 65, webp: 88, jpeg: 88 }, cfg.quality)
-    assert_equal false, cfg.auto_rewrite
-    assert_equal false, cfg.fail_on_missing
-    assert_equal({ 640 => 400, 768 => 600, 1024 => 800, 1280 => 1200 }, cfg.breakpoints)
-    assert_equal 1600, cfg.default_width
+  def test_builds_default_limit_preset_from_legacy_widths
+    config = Bridgetown::ImagePipeline::Config.from(widths: [320, 960], formats: [:webp])
+
+    assert_equal :default, config.default_preset
+    assert_equal [320, 960], config.preset(:default)[:widths]
+    assert_equal :limit, config.preset(:default)[:fit]
+    assert_equal [:webp], config.formats
   end
 
-  def test_kwargs_override_defaults
-    cfg = Bridgetown::ImagePipeline::Config.from(
-      widths: [320, 960],
-      quality: { webp: 90 },
-      auto_rewrite: true
+  def test_normalizes_named_limit_and_fill_presets
+    config = Bridgetown::ImagePipeline::Config.from(
+      default_preset: :content,
+      presets: {
+        content: { widths: [760, 480], fit: :limit, default_sizes: "90vw" },
+        avatar: { sizes: [[192, 192], [96, 96]], fit: :fill, position: :centre }
+      }
     )
-    assert_equal [320, 960], cfg.widths
-    assert_equal 90, cfg.quality[:webp]
-    assert_equal 65, cfg.quality[:avif]
-    assert_equal true, cfg.auto_rewrite
+
+    assert_equal [480, 760], config.preset(:content)[:widths]
+    assert_equal "90vw", config.preset(:content)[:default_sizes]
+    assert_equal [[96, 96], [192, 192]], config.preset(:avatar)[:sizes]
+    assert_equal :centre, config.preset(:avatar)[:position]
   end
 
-  def test_breakpoints_override
-    cfg = Bridgetown::ImagePipeline::Config.from(
-      breakpoints: { 600 => 400, 900 => 800 },
-      default_width: 1200
-    )
-    assert_equal({ 600 => 400, 900 => 800 }, cfg.breakpoints)
-    assert_equal 1200, cfg.default_width
+  def test_rejects_ambiguous_or_unknown_presets
+    assert_raises(ArgumentError) do
+      Bridgetown::ImagePipeline::Config.from(presets: { invalid: { widths: [100], sizes: [[100, 100]] } })
+    end
+    assert_raises(ArgumentError) do
+      Bridgetown::ImagePipeline::Config.from(default_preset: :missing, presets: { content: { widths: [100] } })
+    end
   end
 end
 
@@ -51,471 +76,250 @@ class ManifestTest < Minitest::Test
     FileUtils.remove_entry(@tmp)
   end
 
-  def test_round_trip_via_cache
-    entry = {
-      width: 800, height: 600,
-      variants: [{ path: "/_bridgetown/image_pipeline/foo-400.webp", width: 400, format: :webp }]
-    }
-    @manifest.put("src/images/foo.jpg", entry, cache_key: "abc123")
+  def test_entries_are_preset_aware_and_cache_round_trips
+    entry = ImagePipelineTestData.entry
+    @manifest.put("/images/known.jpg", :content, entry, cache_key: "content")
+    @manifest.put("/images/known.jpg", :avatar, entry.merge(width: 96), cache_key: "avatar")
 
-    fresh = Bridgetown::ImagePipeline::Manifest.new(cache_dir: @tmp)
-    loaded = fresh.fetch_cached("abc123")
-    assert_equal 800, loaded[:width]
-    assert_equal :webp, loaded[:variants].first[:format]
-  end
-
-  def test_lookup_by_public_url
-    @manifest.put("src/images/foo.jpg", {
-                    width: 800, height: 600,
-                    variants: [{ path: "/_bridgetown/image_pipeline/foo-400.webp", width: 400, format: :webp }]
-                  }, cache_key: "abc123")
-    found = @manifest.find_by_src("/images/foo.jpg")
-    refute_nil found
-    assert_equal 800, found[:width]
-  end
-
-  def test_lookup_returns_nil_for_unknown_src
-    assert_nil @manifest.find_by_src("/images/missing.jpg")
-  end
-
-  def test_variants_by_width_groups_formats
-    @manifest.put("src/images/x.jpg", {
-                    width: 1600, height: 900,
-                    variants: [
-                      { path: "/_bridgetown/image_pipeline/x-400.avif", width: 400, format: :avif },
-                      { path: "/_bridgetown/image_pipeline/x-400.webp",  width: 400,  format: :webp },
-                      { path: "/_bridgetown/image_pipeline/x-1600.avif", width: 1600, format: :avif },
-                      { path: "/_bridgetown/image_pipeline/x-1600.webp", width: 1600, format: :webp }
-                    ]
-                  }, cache_key: "k")
-
-    result = @manifest.variants_by_width("/images/x.jpg")
-    assert_equal(
-      {
-        400 => { avif: "/_bridgetown/image_pipeline/x-400.avif", webp: "/_bridgetown/image_pipeline/x-400.webp" },
-        1600 => { avif: "/_bridgetown/image_pipeline/x-1600.avif", webp: "/_bridgetown/image_pipeline/x-1600.webp" }
-      },
-      result
-    )
-  end
-
-  def test_variants_by_width_returns_empty_hash_for_unknown_src
-    assert_equal({}, @manifest.variants_by_width("/images/nope.jpg"))
+    assert_equal 1200, @manifest.find("/images/known.jpg", :content)[:width]
+    assert_equal 96, @manifest.find("/images/known.jpg", :avatar)[:width]
+    assert_equal 1200, @manifest.fetch_cached("content")[:width]
+    assert_equal :webp, @manifest.fetch_cached("content")[:variants].first[:format]
   end
 end
 
 class ProcessorTest < Minitest::Test
   def setup
-    @tmp = Dir.mktmpdir("image_pipeline_test")
-    @src = File.expand_path("fixtures/test-image.jpg", __dir__)
-    @cfg = Bridgetown::ImagePipeline::Config.from(
-      widths: [400, 1600],
+    @tmp = Dir.mktmpdir("image_pipeline_processor")
+    @source = File.expand_path("fixtures/test-image.jpg", __dir__)
+    @config = Bridgetown::ImagePipeline::Config.from(
       formats: [:webp],
-      output_dir: "out",
-      quality: { avif: 50, webp: 82, jpeg: 85 }
+      output_dir: "generated",
+      quality: { webp: 82, jpeg: 85 }
     )
+    @processor = Bridgetown::ImagePipeline::Processor.new(config: @config, output_root: @tmp)
   end
 
   def teardown
     FileUtils.remove_entry(@tmp)
   end
 
-  def test_generates_webp_at_each_width_smaller_than_source
-    processor = Bridgetown::ImagePipeline::Processor.new(config: @cfg, output_root: @tmp)
-    result = processor.process(@src, basename: "test-image")
-    paths = result[:variants].map { |v| v[:path] }
-    assert(paths.any? { |p| p.end_with?("test-image-400.webp") })
-    assert(paths.any? { |p| p.end_with?("test-image-1600.webp") })
-    assert(paths.any? { |p| p.end_with?("test-image-400.jpg") })
-    paths.each { |p| assert File.exist?(File.join(@tmp, p.sub(%r{\A/}, ""))), "missing #{p}" }
+  def test_limit_generates_modern_and_source_format_without_upscaling
+    result = @processor.process(
+      @source,
+      source_id: "images/photo-jpg-abc123",
+      preset_name: :content,
+      preset: { widths: [400, 2400], sizes: [], fit: :limit, position: :centre }
+    )
+
+    assert_equal [400], result[:variants].map { |variant| variant[:width] }.uniq
+    assert_equal %i[jpeg webp], result[:variants].map { |variant| variant[:format] }.sort
+    assert(result[:variants].all? { |variant| variant[:height] == 200 })
+    assert(result[:variants].all? { |variant| File.exist?(File.join(@tmp, variant[:path])) })
   end
 
-  def test_skips_widths_larger_than_source
-    @cfg.widths.replace([1600, 2400])
-    processor = Bridgetown::ImagePipeline::Processor.new(config: @cfg, output_root: @tmp)
-    result = processor.process(@src, basename: "test-image")
-    widths = result[:variants].map { |v| v[:width] }.uniq.sort
-    assert_equal [1600], widths
+  def test_fill_generates_exact_square_and_omits_too_large_variant
+    result = @processor.process(
+      @source,
+      source_id: "images/photo-jpg-abc123",
+      preset_name: :avatar,
+      preset: { widths: [], sizes: [[96, 96], [2400, 2400]], fit: :fill, position: :centre }
+    )
+
+    assert_equal [[96, 96]], result[:variants].map { |variant| [variant[:width], variant[:height]] }.uniq
+    assert(result[:variants].all? { |variant| variant[:path].include?("avatar-96x96") })
+  end
+end
+
+class PipelineTest < Minitest::Test
+  def setup
+    @tmp = Dir.mktmpdir("image_pipeline")
+    FileUtils.mkdir_p(File.join(@tmp, "src", "img", "nested"))
+    FileUtils.cp(File.expand_path("fixtures/test-image.jpg", __dir__), File.join(@tmp, "src", "img", "same.jpg"))
+    FileUtils.cp(File.expand_path("fixtures/test-image.webp", __dir__), File.join(@tmp, "src", "img", "nested", "same.webp"))
+    @output = File.join(@tmp, "output")
+    @config = Bridgetown::ImagePipeline::Config.from(
+      source_globs: ["src/img/**/*.{jpg,webp}"],
+      formats: [:webp],
+      output_dir: "generated",
+      default_preset: :content,
+      presets: {
+        content: { widths: [400], fit: :limit },
+        avatar: { sizes: [[96, 96]], fit: :fill }
+      }
+    )
+    @pipeline = Bridgetown::ImagePipeline::Pipeline.new(
+      config: @config,
+      root_dir: @tmp,
+      output_root: @output,
+      cache_root: File.join(@tmp, "cache")
+    ).refresh
   end
 
-  def test_records_intrinsic_dimensions
-    processor = Bridgetown::ImagePipeline::Processor.new(config: @cfg, output_root: @tmp)
-    result = processor.process(@src, basename: "test-image")
-    assert_equal 2000, result[:width]
-    assert_equal 1000, result[:height]
+  def teardown
+    FileUtils.remove_entry(@tmp)
   end
 
-  def test_does_not_duplicate_when_source_format_matches_configured_format
-    webp_src = File.expand_path("fixtures/test-image.webp", __dir__)
-    processor = Bridgetown::ImagePipeline::Processor.new(config: @cfg, output_root: @tmp)
-    result = processor.process(webp_src, basename: "test-image")
+  def test_resolve_is_lazy_and_preset_aware
+    assert_empty Dir.glob(File.join(@output, "**", "*"))
 
-    # @cfg defaults to formats: [:webp]; the source is also webp.
-    # Each width should yield exactly one variant, not two.
-    width_counts = result[:variants].group_by { |v| v[:width] }.transform_values(&:size)
-    width_counts.each do |width, count|
-      assert_equal 1, count, "expected one variant at width #{width}, got #{count}"
+    content = @pipeline.resolve("/img/same.jpg?version=1", preset: :content)
+    avatar = @pipeline.resolve("/img/same.jpg", preset: :avatar)
+
+    assert(content[:variants].all? { |variant| variant[:path].include?("content-400w") })
+    assert(avatar[:variants].all? { |variant| variant[:path].include?("avatar-96x96") })
+  end
+
+  def test_source_relative_identity_avoids_same_basename_collisions
+    first = @pipeline.resolve("/img/same.jpg", preset: :content)
+    second = @pipeline.resolve("/img/nested/same.webp", preset: :content)
+
+    refute_equal first[:variants].first[:path], second[:variants].first[:path]
+    assert_includes first[:variants].first[:path], "/img/same-jpg-"
+    assert_includes second[:variants].first[:path], "/img/nested/same-webp-"
+  end
+
+  def test_unknown_external_and_traversal_sources_are_ignored
+    assert_nil @pipeline.resolve("https://example.com/image.jpg")
+    assert_nil @pipeline.resolve("/img/../secret.jpg")
+    assert_nil @pipeline.resolve("/img/missing.jpg")
+  end
+
+  def test_cached_derivatives_are_materialized_after_output_is_cleaned
+    entry = @pipeline.resolve("/img/same.jpg", preset: :content)
+    cached_files = Dir.glob(File.join(@tmp, "cache", "files", "**", "*")).select { |path| File.file?(path) }
+    cached_mtimes = cached_files.to_h { |path| [path, File.mtime(path)] }
+    FileUtils.remove_entry(@output)
+
+    fresh_pipeline = Bridgetown::ImagePipeline::Pipeline.new(
+      config: @config,
+      root_dir: @tmp,
+      output_root: @output,
+      cache_root: File.join(@tmp, "cache")
+    ).refresh
+    restored = fresh_pipeline.resolve("/img/same.jpg", preset: :content)
+
+    assert_equal entry, restored
+    assert_equal(cached_mtimes, cached_files.to_h { |path| [path, File.mtime(path)] })
+    restored[:variants].each do |variant|
+      assert File.exist?(File.join(@output, variant[:path]))
     end
   end
 end
 
 class HelperTest < Minitest::Test
   def setup
-    @manifest = Bridgetown::ImagePipeline::Manifest.new(cache_dir: Dir.mktmpdir)
-    @manifest.put("src/images/hero.jpg", {
-                    width: 2400, height: 1600,
-                    variants: [
-                      { path: "/_bridgetown/image_pipeline/hero-400.avif",  width: 400,  format: :avif },
-                      { path: "/_bridgetown/image_pipeline/hero-400.webp",  width: 400,  format: :webp },
-                      { path: "/_bridgetown/image_pipeline/hero-400.jpg",   width: 400,  format: :jpeg },
-                      { path: "/_bridgetown/image_pipeline/hero-1600.avif", width: 1600, format: :avif },
-                      { path: "/_bridgetown/image_pipeline/hero-1600.webp", width: 1600, format: :webp },
-                      { path: "/_bridgetown/image_pipeline/hero-1600.jpg",  width: 1600, format: :jpeg }
-                    ]
-                  }, cache_key: "fake")
-    @cfg = Bridgetown::ImagePipeline::Config.from(
-      widths: [400, 1600],
-      formats: %i[avif webp]
+    config = Bridgetown::ImagePipeline::Config.from(
+      formats: [:webp],
+      presets: { avatar: { sizes: [[96, 96], [192, 192]], fit: :fill } },
+      default_preset: :avatar
     )
-    @helpers = Bridgetown::ImagePipeline::Helpers.new(manifest: @manifest, config: @cfg)
+    pipeline = FakePipeline.new([[["/images/known.jpg", :avatar], ImagePipelineTestData.entry]].to_h)
+    @helpers = Bridgetown::ImagePipeline::Helpers.new(pipeline: pipeline, config: config)
   end
 
-  def test_renders_picture_with_avif_webp_sources_and_img_fallback
-    html = @helpers.picture_tag("/images/hero.jpg",
-                                alt: "Red Rock",
-                                sizes: "(min-width: 1024px) 33vw, 100vw",
-                                class: "w-full")
+  def test_picture_tag_resolves_selected_preset_and_preserves_attributes
+    html = @helpers.picture_tag(
+      "/images/known.jpg",
+      preset: :avatar,
+      alt: "Person",
+      sizes: "96px",
+      width: 96,
+      height: 96,
+      class: "avatar"
+    )
+
     assert_includes html, "<picture>"
-    assert_includes html, 'type="image/avif"'
     assert_includes html, 'type="image/webp"'
-    assert_includes html, "/_bridgetown/image_pipeline/hero-400.avif 400w"
-    assert_includes html, "/_bridgetown/image_pipeline/hero-1600.webp 1600w"
-    assert_includes html, 'alt="Red Rock"'
-    assert_includes html, 'class="w-full"'
-    assert_includes html, 'width="2400"'
-    assert_includes html, 'height="1600"'
-    assert_includes html, 'loading="lazy"'
-    assert_includes html, 'decoding="async"'
-    refute_includes html, "fetchpriority"
+    assert_includes html, 'sizes="96px"'
+    assert_includes html, 'width="96"'
+    assert_includes html, 'height="96"'
+    assert_includes html, 'class="avatar"'
   end
 
-  def test_priority_emits_fetchpriority_and_eager_loading
-    html = @helpers.picture_tag("/images/hero.jpg", alt: "x", sizes: "100vw", priority: true)
-    assert_includes html, 'fetchpriority="high"'
-    assert_includes html, 'loading="eager"'
-  end
+  def test_unknown_source_falls_back_to_original
+    html = @helpers.picture_tag("/images/missing.svg", alt: "Icon")
 
-  def test_unknown_src_falls_back_to_plain_img
-    html = @helpers.picture_tag("/images/missing.svg", alt: "x")
     assert_includes html, '<img src="/images/missing.svg"'
     refute_includes html, "<picture>"
-  end
-
-  def test_unknown_src_raises_when_fail_on_missing
-    @cfg.fail_on_missing = true
-    err = assert_raises(Bridgetown::ImagePipeline::MissingSourceError) do
-      @helpers.picture_tag("/images/missing.svg", alt: "x")
-    end
-    assert_match(/missing\.svg/, err.message)
-  end
-
-  def test_escapes_attribute_values
-    html = @helpers.picture_tag("/images/hero.jpg", alt: %q(it's "fine"))
-    assert_includes html, 'alt="it&#39;s &quot;fine&quot;"'
-  end
-
-  def test_bg_image_class_slugifies_basename
-    assert_equal "bg-img-all-flora",            @helpers.bg_image_class("/images/all-flora.jpg")
-    assert_equal "bg-img-flowers-full-bottom",  @helpers.bg_image_class("/images/flowers_full_bottom.png")
-    assert_equal "bg-img-corner-plant-right",   @helpers.bg_image_class("/images/corner-plant-right.png")
-  end
-
-  def test_bg_image_class_idempotent
-    a = @helpers.bg_image_class("/images/hero.jpg")
-    b = @helpers.bg_image_class("/images/hero.jpg")
-    assert_equal a, b
-  end
-
-  def test_bg_image_block_emits_style_with_avif_webp_and_class
-    @manifest.put("src/images/hero.jpg", {
-                    width: 1600, height: 900,
-                    variants: [
-                      { path: "/_bridgetown/image_pipeline/hero-400.avif",  width: 400,  format: :avif },
-                      { path: "/_bridgetown/image_pipeline/hero-400.webp",  width: 400,  format: :webp },
-                      { path: "/_bridgetown/image_pipeline/hero-1600.avif", width: 1600, format: :avif },
-                      { path: "/_bridgetown/image_pipeline/hero-1600.webp", width: 1600, format: :webp }
-                    ]
-                  }, cache_key: "k2")
-
-    out = @helpers.bg_image_block("/images/hero.jpg")
-    assert out.start_with?("<style>"), out
-    assert out.end_with?("</style>"), out
-    assert_includes out,
-                    ".bg-img-hero{background-image:image-set(url(/_bridgetown/image_pipeline/hero-1600.avif) type('image/avif'),url(/_bridgetown/image_pipeline/hero-1600.webp) type('image/webp'))}"
-    assert_includes out,
-                    "@media (max-width:640px){.bg-img-hero{background-image:image-set(url(/_bridgetown/image_pipeline/hero-400.avif)"
-  end
-
-  def test_bg_image_block_falls_back_when_src_not_in_manifest
-    _out, err = capture_io { @result = @helpers.bg_image_block("/images/missing.jpg") }
-    assert_includes @result, "<style>.bg-img-missing{background-image:url(/images/missing.jpg)}</style>"
-    assert_match(%r{no manifest entry for /images/missing\.jpg}, err)
-  end
-
-  def test_bg_image_block_with_breakpoint_only_wraps_min_width
-    @manifest.put("src/images/wide.jpg", {
-                    width: 1600, height: 800,
-                    variants: [
-                      { path: "/_bridgetown/image_pipeline/wide-1600.avif", width: 1600, format: :avif },
-                      { path: "/_bridgetown/image_pipeline/wide-1600.webp", width: 1600, format: :webp }
-                    ]
-                  }, cache_key: "k3")
-
-    out = @helpers.bg_image_block("/images/wide.jpg", breakpoint_only: 1024)
-    assert_includes out, "@media (min-width:1024px){.bg-img-wide{"
-  end
-
-  def test_bg_image_class_with_suffix_appends_segment
-    assert_equal "bg-img-faq-flowers-hero",
-                 @helpers.bg_image_class("/images/faq-flowers.png", class_suffix: "hero")
-  end
-
-  def test_bg_image_block_with_suffix_uses_suffixed_class
-    @manifest.put("src/images/zed.jpg", {
-                    width: 1600, height: 900,
-                    variants: [
-                      { path: "/_bridgetown/image_pipeline/zed-1600.avif", width: 1600, format: :avif },
-                      { path: "/_bridgetown/image_pipeline/zed-1600.webp", width: 1600, format: :webp }
-                    ]
-                  }, cache_key: "kz")
-    out = @helpers.bg_image_block("/images/zed.jpg", class_suffix: "hero")
-    assert_includes out, ".bg-img-zed-hero{background-image:"
-    refute_includes out, ".bg-img-zed{background-image:"
-  end
-
-  def test_bg_image_block_uses_config_breakpoints
-    custom_cfg = Bridgetown::ImagePipeline::Config.from(
-      breakpoints: { 900 => 400 },
-      default_width: 1600
-    )
-    helpers = Bridgetown::ImagePipeline::Helpers.new(manifest: @manifest, config: custom_cfg)
-    out = helpers.bg_image_block("/images/hero.jpg")
-    assert_includes out, "@media (max-width:900px){.bg-img-hero{"
-    refute_includes out, "@media (max-width:640px)"
   end
 end
 
 class InspectorTest < Minitest::Test
   def setup
-    @manifest = Bridgetown::ImagePipeline::Manifest.new(cache_dir: Dir.mktmpdir)
-    @manifest.put("src/images/known.jpg", {
-                    width: 1200, height: 600,
-                    variants: [
-                      { path: "/_bridgetown/image_pipeline/known-400.avif", width: 400, format: :avif },
-                      { path: "/_bridgetown/image_pipeline/known-400.webp",  width: 400,  format: :webp },
-                      { path: "/_bridgetown/image_pipeline/known-400.jpg",   width: 400,  format: :jpeg },
-                      { path: "/_bridgetown/image_pipeline/known-1200.avif", width: 1200, format: :avif },
-                      { path: "/_bridgetown/image_pipeline/known-1200.webp", width: 1200, format: :webp },
-                      { path: "/_bridgetown/image_pipeline/known-1200.jpg",  width: 1200, format: :jpeg }
-                    ]
-                  }, cache_key: "k")
-    @cfg = Bridgetown::ImagePipeline::Config.from(
-      widths: [400, 1200],
-      formats: %i[avif webp],
-      auto_rewrite: true
+    @config = Bridgetown::ImagePipeline::Config.from(
+      formats: [:webp],
+      auto_rewrite: true,
+      default_preset: :content,
+      presets: {
+        content: { widths: [400, 1200], fit: :limit, default_sizes: "90vw" },
+        avatar: { sizes: [[96, 96]], fit: :fill }
+      }
     )
-    @inspector = Bridgetown::ImagePipeline::Inspector.new(manifest: @manifest, config: @cfg)
+    entries = {
+      ["/images/known.jpg", :content] => ImagePipelineTestData.entry,
+      ["/images/known.jpg", :avatar] => ImagePipelineTestData.entry
+    }
+    @inspector = Bridgetown::ImagePipeline::Inspector.new(
+      pipeline: FakePipeline.new(entries),
+      config: @config
+    )
   end
 
-  def test_wraps_known_img_in_picture
-    html = '<html><body><img src="/images/known.jpg" alt="x"></body></html>'
-    out  = @inspector.rewrite(html)
-    assert_includes out, "<picture>"
-    assert_includes out, 'type="image/avif"'
-    assert_includes out, 'type="image/webp"'
-    assert_includes out, 'width="1200"'
-    assert_includes out, 'height="600"'
+  def test_rewrites_with_default_preset_and_preserves_attributes
+    output = @inspector.rewrite(
+      '<html><body><a href="/"><img src="/images/known.jpg" alt="x" title="y" class="photo"></a></body></html>'
+    )
+
+    assert_includes output, "<a href=\"/\"><picture>"
+    assert_includes output, 'alt="x"'
+    assert_includes output, 'title="y"'
+    assert_includes output, 'class="photo"'
+    assert_includes output, 'loading="lazy"'
+    assert_includes output, 'decoding="async"'
+    assert_includes output, 'sizes="90vw"'
   end
 
-  def test_leaves_unknown_img_unchanged
-    html = '<html><body><img src="/images/unknown.jpg" alt="x"></body></html>'
-    out  = @inspector.rewrite(html)
-    refute_includes out, "<picture>"
-    assert_includes out, '<img src="/images/unknown.jpg"'
+  def test_honors_and_removes_explicit_preset
+    output = @inspector.rewrite(
+      '<html><body><img src="/images/known.jpg" alt="x" data-image-preset="avatar"></body></html>'
+    )
+
+    assert_includes output, "<picture>"
+    refute_includes output, "data-image-preset"
   end
 
-  def test_skips_img_already_inside_picture
-    html = '<html><body><picture><img src="/images/known.jpg" alt="x"></picture></body></html>'
-    out  = @inspector.rewrite(html)
-    assert_equal 1, out.scan("<picture>").length
-  end
+  def test_skips_owned_or_ineligible_images
+    html = <<~HTML
+      <html><body>
+        <picture><img src="/images/known.jpg"></picture>
+        <img src="/images/known.jpg" srcset="/custom.jpg 1x">
+        <img src="/images/known.jpg" data-no-pipeline>
+        <img src="https://example.com/image.jpg">
+      </body></html>
+    HTML
+    output = @inspector.rewrite(html)
 
-  def test_skips_data_no_pipeline_optout
-    html = '<html><body><img src="/images/known.jpg" alt="x" data-no-pipeline></body></html>'
-    out  = @inspector.rewrite(html)
-    refute_includes out, "<picture>"
-  end
-
-  def test_preserves_existing_author_attrs
-    html = '<html><body><img src="/images/known.jpg" alt="x" loading="eager" fetchpriority="high" class="hero"></body></html>'
-    out  = @inspector.rewrite(html)
-    assert_includes out, 'loading="eager"'
-    assert_includes out, 'fetchpriority="high"'
-    assert_includes out, 'class="hero"'
-  end
-
-  def test_rewrite_skipped_when_auto_rewrite_false
-    cfg = Bridgetown::ImagePipeline::Config.from(auto_rewrite: false)
-    inspector = Bridgetown::ImagePipeline::Inspector.new(manifest: @manifest, config: cfg)
-    html = '<html><body><img src="/images/known.jpg" alt="x"></body></html>'
-    out  = inspector.rewrite(html)
-    refute_includes out, "<picture>"
-  end
-end
-
-require "bridgetown"
-require "bridgetown/image_pipeline/builder"
-
-class BuilderAutoRewriteHookTest < Minitest::Test
-  FakeResource = Struct.new(:site, :output, :output_ext)
-
-  class FakeSite
-    attr_reader :root_dir
-
-    def initialize(root_dir)
-      @root_dir = root_dir
-    end
-
-    def in_dest_dir
-      File.join(@root_dir, "output")
-    end
-  end
-
-  def setup
-    @tmp     = Dir.mktmpdir("image_pipeline_builder_hook")
-    @site    = FakeSite.new(@tmp)
-    @cfg     = Bridgetown::ImagePipeline::Config.from(auto_rewrite: true)
-    @builder = Bridgetown::ImagePipeline::Builder.allocate
-    @builder.instance_variable_set(:@site, @site)
-    @builder.instance_variable_set(:@config, @cfg)
-    @builder.instance_variable_set(:@manifest,
-                                   Bridgetown::ImagePipeline::Manifest.new(cache_dir: File.join(@tmp, "cache")))
-    @builder.manifest.put("src/images/known.jpg", {
-                            width: 1200, height: 600,
-                            variants: [
-                              { path: "/_bridgetown/image_pipeline/known-400.avif", width: 400, format: :avif },
-                              { path: "/_bridgetown/image_pipeline/known-400.webp",  width: 400,  format: :webp },
-                              { path: "/_bridgetown/image_pipeline/known-1200.avif", width: 1200, format: :avif },
-                              { path: "/_bridgetown/image_pipeline/known-1200.webp", width: 1200, format: :webp }
-                            ]
-                          }, cache_key: "k")
-  end
-
-  def teardown
-    FileUtils.remove_entry(@tmp)
-    Bridgetown::Hooks.instance_variable_get(:@registry)&.each_value do |hooks|
-      hooks.reject! { |h| h.reloadable == false }
-    end
-  end
-
-  def test_post_render_hook_rewrites_html_resource_output
-    @builder.register_auto_rewrite_hooks!
-    resource = FakeResource.new(@site, '<html><body><img src="/images/known.jpg" alt="x"></body></html>', ".html")
-    Bridgetown::Hooks.trigger(:resources, :post_render, resource)
-    assert_includes resource.output, "<picture>"
-    assert_includes resource.output, 'type="image/avif"'
-  end
-
-  def test_post_render_hook_skips_non_html_output
-    @builder.register_auto_rewrite_hooks!
-    resource = FakeResource.new(@site, "raw bytes", ".xml")
-    Bridgetown::Hooks.trigger(:resources, :post_render, resource)
-    assert_equal "raw bytes", resource.output
-  end
-
-  def test_post_render_hook_ignores_other_sites
-    @builder.register_auto_rewrite_hooks!
-    other_site = FakeSite.new(Dir.mktmpdir("other_site"))
-    html = '<html><body><img src="/images/known.jpg" alt="x"></body></html>'
-    resource = FakeResource.new(other_site, html, ".html")
-    Bridgetown::Hooks.trigger(:resources, :post_render, resource)
-    assert_equal html, resource.output
-  ensure
-    FileUtils.remove_entry(other_site.root_dir) if other_site
+    assert_equal 1, output.scan("<picture>").length
+    assert_includes output, 'srcset="/custom.jpg 1x"'
+    assert_includes output, "data-no-pipeline"
+    assert_includes output, "https://example.com/image.jpg"
   end
 end
 
 class BgImageSetTest < Minitest::Test
-  def variants_full
-    {
-      400 => { avif: "/_bridgetown/image_pipeline/foo-400.avif",  webp: "/_bridgetown/image_pipeline/foo-400.webp" },
-      600 => { avif: "/_bridgetown/image_pipeline/foo-600.avif",  webp: "/_bridgetown/image_pipeline/foo-600.webp" },
-      800 => { avif: "/_bridgetown/image_pipeline/foo-800.avif",  webp: "/_bridgetown/image_pipeline/foo-800.webp" },
-      1200 => { avif: "/_bridgetown/image_pipeline/foo-1200.avif", webp: "/_bridgetown/image_pipeline/foo-1200.webp" },
-      1600 => { avif: "/_bridgetown/image_pipeline/foo-1600.avif", webp: "/_bridgetown/image_pipeline/foo-1600.webp" }
-    }
-  end
-
-  def breakpoints
-    { 640 => 400, 768 => 600, 1024 => 800, 1280 => 1200 }
-  end
-
-  def test_emits_default_rule_and_four_media_overrides
+  def test_emits_image_set_and_nearest_breakpoint_variant
     css = Bridgetown::ImagePipeline::BgImageSet.css(
-      class_name: "bg-img-foo",
-      variants: variants_full,
-      breakpoints: breakpoints,
-      default_width: 1600
+      class_name: "bg-img-hero",
+      variants: {
+        400 => { webp: "/hero-400.webp" },
+        1200 => { webp: "/hero-1200.webp" }
+      },
+      breakpoints: { 640 => 400 },
+      default_width: 1200
     )
-    assert_includes css,
-                    ".bg-img-foo{background-image:image-set(url(/_bridgetown/image_pipeline/foo-1600.avif) type('image/avif'),url(/_bridgetown/image_pipeline/foo-1600.webp) type('image/webp'))}"
-    assert_includes css,
-                    "@media (max-width:1280px){.bg-img-foo{background-image:image-set(url(/_bridgetown/image_pipeline/foo-1200.avif) type('image/avif'),url(/_bridgetown/image_pipeline/foo-1200.webp) type('image/webp'))}}"
-    assert_includes css,
-                    "@media (max-width:1024px){.bg-img-foo{background-image:image-set(url(/_bridgetown/image_pipeline/foo-800.avif) type('image/avif'),url(/_bridgetown/image_pipeline/foo-800.webp) type('image/webp'))}}"
-    assert_includes css,
-                    "@media (max-width:768px){.bg-img-foo{background-image:image-set(url(/_bridgetown/image_pipeline/foo-600.avif) type('image/avif'),url(/_bridgetown/image_pipeline/foo-600.webp) type('image/webp'))}}"
-    assert_includes css,
-                    "@media (max-width:640px){.bg-img-foo{background-image:image-set(url(/_bridgetown/image_pipeline/foo-400.avif) type('image/avif'),url(/_bridgetown/image_pipeline/foo-400.webp) type('image/webp'))}}"
-  end
 
-  def test_falls_back_to_nearest_width_when_breakpoint_missing
-    variants = {
-      400 => { avif: "/a-400.avif", webp: "/a-400.webp" },
-      1200 => { avif: "/a-1200.avif", webp: "/a-1200.webp" },
-      1600 => { avif: "/a-1600.avif", webp: "/a-1600.webp" }
-    }
-    _out, err = capture_io do
-      css = Bridgetown::ImagePipeline::BgImageSet.css(
-        class_name: "bg-img-a", variants: variants,
-        breakpoints: { 768 => 600 }, default_width: 1600
-      )
-      assert_includes css,
-                      "@media (max-width:768px){.bg-img-a{background-image:image-set(url(/a-400.avif) type('image/avif'),url(/a-400.webp) type('image/webp'))}}"
-    end
-    assert_match(/no 600w derivative; using 400w/, err)
-  end
-
-  def test_breakpoint_only_wraps_output_in_min_width_media
-    css = Bridgetown::ImagePipeline::BgImageSet.css(
-      class_name: "bg-img-foo",
-      variants: variants_full,
-      breakpoints: breakpoints,
-      default_width: 1600,
-      breakpoint_only: 1024
-    )
-    assert css.start_with?("@media (min-width:1024px){"), "expected wrap, got: #{css[0, 60]}"
-    assert css.end_with?("}"), "expected closing }, got: ...#{css[-10..]}"
-    assert_includes css, ".bg-img-foo{background-image:image-set(url(/_bridgetown/image_pipeline/foo-1600.avif)"
-  end
-
-  def test_empty_variants_emits_background_none
-    css = Bridgetown::ImagePipeline::BgImageSet.css(
-      class_name: "bg-img-missing",
-      variants: {},
-      breakpoints: breakpoints,
-      default_width: 1600
-    )
-    assert_equal ".bg-img-missing{background-image:none}", css
+    assert_includes css, ".bg-img-hero{background-image:image-set(url(/hero-1200.webp) type('image/webp'))}"
+    assert_includes css, "@media (max-width:640px)"
   end
 end

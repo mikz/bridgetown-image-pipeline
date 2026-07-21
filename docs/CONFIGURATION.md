@@ -14,6 +14,32 @@ All options, with defaults:
 | `fail_on_missing` | `false` | Raise vs. warn on missing manifest |
 | `breakpoints` | `{ 640 => 400, 768 => 600, 1024 => 800, 1280 => 1200 }` | Tailwind-style breakpoints for `bg_image_block` |
 | `default_width` | `1600` | Default tier for `bg_image_block`'s un-prefixed rule |
+| `presets` | derived from `widths` | Named proportional or exact-crop transformations |
+| `default_preset` | `:default` | Preset used when a helper or Inspector call does not select one |
+
+Sources are indexed before rendering, but derivatives are generated only when
+`picture_tag`, `bg_image_block`, or the Inspector resolves a source and preset.
+
+```ruby
+init "bridgetown-image-pipeline" do
+  formats [:webp]
+  default_preset :content
+  presets(
+    content: {
+      widths: [480, 760, 1200],
+      fit: :limit,
+      default_sizes: "100vw"
+    },
+    avatar: {
+      sizes: [[96, 96], [192, 192]],
+      fit: :fill
+    }
+  )
+end
+```
+
+`fit: :limit` preserves the source ratio. `fit: :fill` crops from the centre
+to the exact requested sizes. Neither mode enlarges a source image.
 
 ## Gotcha: Tailwind v4 and `bg-[url(...)]` in docs
 

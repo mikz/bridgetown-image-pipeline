@@ -11,8 +11,8 @@ elements and CSS `image-set()` backgrounds.
 
 ## Features
 
-- **Build-time derivative generation** via libvips. AVIF + WebP at configurable
-  widths (default: 600, 1200, 1600). Source-width-aware (no upscaling).
+- **Lazy build-time derivative generation** via libvips. Named presets support
+  proportional widths and exact centre crops without upscaling.
 - **`picture_tag` helper** — emits `<picture>` with `<source>` per format and
   an `<img>` fallback with `srcset` + `sizes`.
 - **`bg_image_block` helper** — emits an inline `<style>` block with

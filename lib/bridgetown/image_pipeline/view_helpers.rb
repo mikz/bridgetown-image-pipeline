@@ -23,7 +23,7 @@ module Bridgetown
 
       def helpers_for(site)
         Bridgetown::ImagePipeline::Helpers.new(
-          manifest: site.image_pipeline_manifest,
+          pipeline: site.image_pipeline,
           config: site.image_pipeline_config
         )
       end

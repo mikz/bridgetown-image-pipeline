@@ -1,18 +1,18 @@
 # frozen_string_literal: true
 
-require "cgi"
+require "cgi/escape"
 require_relative "bg_image_set"
 
 module Bridgetown
   module ImagePipeline
     class Helpers
-      def initialize(manifest:, config:)
-        @manifest = manifest
+      def initialize(pipeline:, config:)
+        @pipeline = pipeline
         @config   = config
       end
 
-      def picture_tag(src, alt: "", sizes: nil, priority: false, **attrs)
-        entry = @manifest.find_by_src(src)
+      def picture_tag(src, alt: "", sizes: nil, priority: false, preset: nil, **attrs)
+        entry = @pipeline.resolve(src, preset: preset)
         return fallback_img(src, alt: alt, sizes: sizes, priority: priority, attrs: attrs) unless entry
 
         sources_html = picture_sources(entry, sizes: sizes)
@@ -26,9 +26,10 @@ module Bridgetown
         "bg-img-#{slug}#{suffix}"
       end
 
-      def bg_image_block(src, breakpoint_only: nil, class_suffix: nil)
+      def bg_image_block(src, breakpoint_only: nil, class_suffix: nil, preset: nil)
         class_name = bg_image_class(src, class_suffix: class_suffix)
-        variants   = @manifest.variants_by_width(src)
+        entry = @pipeline.resolve(src, preset: preset)
+        variants = variants_by_width(entry)
 
         if variants.empty?
           warn "[bridgetown-image-pipeline] no manifest entry for #{src}; bg_image_block falling back to url(#{src})"
@@ -48,6 +49,14 @@ module Bridgetown
       end
 
       private
+
+      def variants_by_width(entry)
+        return {} unless entry
+
+        entry[:variants].each_with_object({}) do |variant, grouped|
+          (grouped[variant[:width]] ||= {})[variant[:format]] = variant[:path]
+        end
+      end
 
       def picture_sources(entry, sizes:)
         @config.formats.map do |fmt|

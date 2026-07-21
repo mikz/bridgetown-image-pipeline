@@ -50,12 +50,10 @@ for a minimal `ubuntu-latest` workflow that covers both gotchas:
    even though `bundle install` succeeds and `bundle show bridgetown-image-pipeline`
    finds the gem.
 
-2. **Cache the derivatives across runs.** AVIF encoding is CPU-heavy — a
-   site with ~30+ source images can take 10+ minutes of cold CI time per
-   build. Caching `.bridgetown-cache/image_pipeline` (the content-addressed
-   manifest) and `output/_bridgetown/image_pipeline` (the encoded
-   derivatives) with `restore-keys` fallback lets unchanged images
-   short-circuit. Adding a single new image only re-encodes that image.
+2. **Cache `.image-pipeline-cache` across runs.** It contains both manifests
+   and encoded derivatives. The cache intentionally lives outside
+   `.bridgetown-cache`, which `bridgetown deploy` removes. A warm build copies
+   unchanged derivatives into the freshly cleaned output without re-encoding.
 
 ## Activate the plugin
 

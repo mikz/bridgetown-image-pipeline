@@ -9,15 +9,14 @@ module Bridgetown
       def initialize(cache_dir:)
         @cache_dir = cache_dir
         FileUtils.mkdir_p(@cache_dir)
-        @entries = {}        # source_path => entry hash (symbolized)
-        @by_src  = {}        # "/images/foo.jpg" => entry hash
+        @entries = {} # [public source path, preset] => entry hash
       end
 
-      def put(source_path, entry, cache_key:)
+      def put(src, preset, entry, cache_key:)
         symbolized = deep_symbolize(entry)
-        @entries[source_path] = symbolized
-        @by_src[public_src_for(source_path)] = symbolized
+        @entries[[src, preset.to_sym]] = symbolized
         File.write(cache_file(cache_key), JSON.generate(symbolized))
+        symbolized
       end
 
       def fetch_cached(cache_key)
@@ -27,17 +26,16 @@ module Bridgetown
         deep_symbolize(JSON.parse(File.read(path)))
       end
 
-      def register_cached(source_path, entry)
-        @entries[source_path] = entry
-        @by_src[public_src_for(source_path)] = entry
+      def register_cached(src, preset, entry)
+        @entries[[src, preset.to_sym]] = entry
       end
 
-      def find_by_src(src)
-        @by_src[src]
+      def find(src, preset)
+        @entries[[src, preset.to_sym]]
       end
 
-      def variants_by_width(src)
-        entry = @by_src[src]
+      def variants_by_width(src, preset)
+        entry = find(src, preset)
         return {} unless entry
 
         entry[:variants].each_with_object({}) do |v, out|
@@ -53,10 +51,6 @@ module Bridgetown
 
       def cache_file(cache_key)
         File.join(@cache_dir, "#{cache_key}.manifest.json")
-      end
-
-      def public_src_for(source_path)
-        "/#{source_path.sub(%r{\Asrc/}, "")}"
       end
 
       def deep_symbolize(obj)
