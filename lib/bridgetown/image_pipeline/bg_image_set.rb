@@ -32,9 +32,20 @@ module Bridgetown
 
       def rule(class_name, formats)
         sources = []
-        sources << "url(#{formats[:avif]}) type('image/avif')" if formats[:avif]
-        sources << "url(#{formats[:webp]}) type('image/webp')" if formats[:webp]
+        sources << "#{css_url(formats[:avif])} type('image/avif')" if formats[:avif]
+        sources << "#{css_url(formats[:webp])} type('image/webp')" if formats[:webp]
         ".#{class_name}{background-image:image-set(#{sources.join(",")})}"
+      end
+
+      def css_url(path)
+        escaped = path.to_s
+                      .gsub("\\") { "\\\\" }
+                      .gsub('"') { '\\"' }
+                      .gsub("\n") { "\\a " }
+                      .gsub("\r") { "\\d " }
+                      .gsub("\f") { "\\c " }
+                      .gsub("<") { "\\3c " }
+        %(url("#{escaped}"))
       end
 
       def nearest(variants, target)

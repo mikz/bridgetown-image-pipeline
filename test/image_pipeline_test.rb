@@ -350,6 +350,13 @@ class HelperTest < Minitest::Test
     assert_includes html, 'class="avatar"'
   end
 
+  def test_picture_tag_derives_height_for_an_explicit_width
+    html = @helpers.picture_tag("/images/known.jpg", preset: :avatar, width: 300, alt: "Known")
+
+    assert_includes html, 'width="300"'
+    assert_includes html, 'height="150"'
+  end
+
   def test_unknown_source_falls_back_to_original
     html = @helpers.picture_tag("/images/missing.svg", alt: "Icon")
 
@@ -390,7 +397,15 @@ class HelperTest < Minitest::Test
     output, = capture_io { @background = @helpers.bg_image_block("/images/missing.jpg", preset: :avatar) }
 
     assert_empty output
-    assert_includes @background, "background-image:url(/images/missing.jpg)"
+    assert_includes @background, 'background-image:url("/images/missing.jpg")'
+  end
+
+  def test_background_fallback_quotes_and_escapes_unsafe_url_characters
+    capture_io do
+      @background = @helpers.bg_image_block('/images/a space/quote"<.jpg', preset: :avatar)
+    end
+
+    assert_includes @background, 'url("/images/a space/quote\\"\\3c .jpg")'
   end
 end
 
@@ -489,7 +504,7 @@ class BgImageSetTest < Minitest::Test
       default_width: 1200
     )
 
-    assert_includes css, ".bg-img-hero{background-image:image-set(url(/hero-1200.webp) type('image/webp'))}"
+    assert_includes css, ".bg-img-hero{background-image:image-set(url(\"/hero-1200.webp\") type('image/webp'))}"
     assert_includes css, "@media (max-width:640px)"
   end
 
@@ -502,6 +517,17 @@ class BgImageSetTest < Minitest::Test
     )
 
     assert_equal ".bg-img-missing{background-image:none}", css
+  end
+
+  def test_image_set_quotes_and_escapes_url_characters
+    css = Bridgetown::ImagePipeline::BgImageSet.css(
+      class_name: "bg-img-hero",
+      variants: { 400 => { webp: '/images/a space/quote"<.webp' } },
+      breakpoints: {},
+      default_width: 400
+    )
+
+    assert_includes css, 'url("/images/a space/quote\\"\\3c .webp")'
   end
 
   def test_nearest_variant_and_breakpoint_only_wrapper

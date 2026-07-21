@@ -26,6 +26,9 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Explicit Inspector presets use their own default `sizes` value.
 - Source lookup treats canonically equivalent Unicode paths as the same path,
   avoiding cross-platform NFC/NFD filename mismatches.
+- Background helpers quote and escape URLs containing spaces or quotes.
+- Explicit picture widths derive a proportional intrinsic height unless a
+  height is supplied.
 
 ## [0.1.1] - 2026-05-19
 

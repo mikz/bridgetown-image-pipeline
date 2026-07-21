@@ -33,7 +33,7 @@ module Bridgetown
 
         if variants.empty?
           warn "[bridgetown-image-pipeline] no manifest entry for #{src}; bg_image_block falling back to url(#{src})"
-          body = ".#{class_name}{background-image:url(#{src})}"
+          body = ".#{class_name}{background-image:#{BgImageSet.css_url(src)}}"
           body = "@media (min-width:#{breakpoint_only}px){#{body}}" if breakpoint_only
           return "<style>#{body}</style>"
         end
@@ -74,13 +74,14 @@ module Bridgetown
         fallback_variants = entry[:variants].select { |v| v[:format] != :avif && v[:format] != :webp }
         default = fallback_variants.find { |v| v[:width] == middle_width(fallback_variants) } || fallback_variants.last
         srcset = fallback_variants.map { |v| "#{v[:path]} #{v[:width]}w" }.join(", ")
+        intrinsic_width, intrinsic_height = intrinsic_dimensions(entry, default, attrs)
 
         merged = {
           src: default ? default[:path] : src,
           srcset: srcset.empty? ? nil : srcset,
           sizes: sizes,
-          width: entry[:width],
-          height: entry[:height],
+          width: intrinsic_width,
+          height: intrinsic_height,
           alt: alt,
           loading: priority ? "eager" : "lazy",
           decoding: "async",
@@ -106,6 +107,16 @@ module Bridgetown
       def middle_width(variants)
         ws = variants.map { |v| v[:width] }.sort
         ws[ws.length / 2]
+      end
+
+      def scaled_height(image, width)
+        (image[:height] * width.to_f / image[:width]).round
+      end
+
+      def intrinsic_dimensions(entry, default, attrs)
+        width = attrs.fetch(:width) { default ? default[:width] : entry[:width] }
+        height = attrs.fetch(:height) { scaled_height(default || entry, width) }
+        [width, height]
       end
 
       def render_attrs(attrs)
