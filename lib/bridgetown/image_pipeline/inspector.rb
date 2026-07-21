@@ -37,7 +37,7 @@ module Bridgetown
         ensure_dimensions(img, entry)
         img["loading"] ||= "lazy"
         img["decoding"] ||= "async"
-        ensure_img_srcset(img, entry)
+        ensure_img_srcset(img, entry, preset)
 
         picture = build_picture(img, entry, doc)
         img.replace(picture).tap { picture.add_child(img) }
@@ -73,14 +73,14 @@ module Bridgetown
         img["height"] ||= entry[:height].to_s
       end
 
-      def ensure_img_srcset(img, entry)
+      def ensure_img_srcset(img, entry, preset)
         return if img["srcset"]
 
         fallback = entry[:variants].reject { |v| %i[avif webp].include?(v[:format]) }
         return if fallback.empty?
 
         img["srcset"] = fallback.map { |v| "#{v[:path]} #{v[:width]}w" }.join(", ")
-        img["sizes"] ||= @config.preset(@config.default_preset)[:default_sizes] || "100vw"
+        img["sizes"] ||= @config.preset(preset)[:default_sizes] || "100vw"
         smallest = fallback.min_by { |v| v[:width] }
         img["src"] = smallest[:path] if smallest
       end

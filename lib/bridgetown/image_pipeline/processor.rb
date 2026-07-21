@@ -12,11 +12,11 @@ module Bridgetown
       end
 
       def process(source_path, source_id:, preset_name:, preset:)
-        image = Vips::Image.new_from_file(source_path).autorot
+        image = Vips::Image.new_from_buffer(File.binread(source_path), "").autorot
         source_width  = image.width
         source_height = image.height
         original_fmt = File.extname(source_path).downcase.delete(".").sub("jpeg", "jpg").to_sym
-        variants = build_variants(source_path,
+        variants = build_variants(image,
                                   source_id: source_id,
                                   preset_name: preset_name,
                                   preset: preset,
@@ -28,7 +28,7 @@ module Bridgetown
 
       private
 
-      def build_variants(source_path, source_id:, preset_name:, preset:, original_fmt:, source_size:)
+      def build_variants(source_image, source_id:, preset_name:, preset:, original_fmt:, source_size:)
         source_width, source_height = source_size
         variants = []
         requested_variants(preset).each do |dimensions|
@@ -39,7 +39,7 @@ module Bridgetown
           formats = @config.formats.dup
           formats << original_fmt unless formats.include?(original_fmt)
           formats.each do |format|
-            variants << build_variant(source_path,
+            variants << build_variant(source_image,
                                       source_id: source_id,
                                       preset_name: preset_name,
                                       preset: preset,
@@ -56,18 +56,19 @@ module Bridgetown
         preset[:sizes]
       end
 
-      def build_variant(source_path, source_id:, preset_name:, preset:, dimensions:, format:)
+      def build_variant(source_image, source_id:, preset_name:, preset:, dimensions:, format:)
         target_width, target_height = dimensions
         label = target_height ? "#{target_width}x#{target_height}" : "#{target_width}w"
-        filename = "#{preset_name}-#{label}.#{format == :jpeg ? "jpg" : format}"
-        relative_path = File.join("/", @config.output_dir, source_id, filename)
-        absolute_path = File.join(@output_root, @config.output_dir, source_id, filename)
+        filename = "#{label}.#{format == :jpeg ? "jpg" : format}"
+        output_path = File.join(source_id, preset_name.to_s, filename)
+        relative_path = File.join("/", @config.output_dir, output_path)
+        absolute_path = File.join(@output_root, @config.output_dir, output_path)
         FileUtils.mkdir_p(File.dirname(absolute_path))
 
         saver_format = format == :jpg ? :jpeg : format
         quality = @config.quality[saver_format] || @config.quality[format]
 
-        pipeline = ImageProcessing::Vips.source(source_path).autorot
+        pipeline = ImageProcessing::Vips.source(source_image)
         pipeline = if preset[:fit] == :fill
                      pipeline.resize_to_fill(target_width, target_height)
                    else

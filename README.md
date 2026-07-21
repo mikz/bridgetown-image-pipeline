@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE.txt)
 [![Downloads](https://img.shields.io/gem/dt/bridgetown-image-pipeline.svg)](https://rubygems.org/gems/bridgetown-image-pipeline)
 
-A Bridgetown 2.0+ plugin that pre-generates responsive image derivatives
+A Bridgetown 2.0+ plugin that lazily generates responsive image derivatives
 (**AVIF**, **WebP**) at multiple widths, plus ERB helpers for `<picture>`
 elements and CSS `image-set()` backgrounds.
 
@@ -20,8 +20,8 @@ elements and CSS `image-set()` backgrounds.
   aware. Drop-in replacement for `bg-[url(...)]` utilities.
 - **`Inspector`** (optional, off by default) — rewrites bare `<img>` tags in
   rendered HTML to wrap them in `<picture>` with the appropriate sources.
-- **Per-derivative cache** keyed by source SHA1 + gem version + config
-  fingerprint. Rebuilds skip unchanged sources.
+- **Durable per-derivative cache** outside Bridgetown's Cleaner scope, keyed by
+  source SHA1 + gem version + preset configuration.
 
 ## Requirements
 

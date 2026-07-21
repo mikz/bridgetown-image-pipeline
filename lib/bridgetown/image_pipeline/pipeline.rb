@@ -13,12 +13,13 @@ module Bridgetown
     class Pipeline
       def initialize(config:, root_dir:, output_root:, cache_root:)
         @config = config
-        @root_dir = File.expand_path(root_dir)
+        @root_dir = File.realpath(root_dir)
         @output_root = output_root
         @manifest = Manifest.new(cache_dir: cache_root)
         @derivative_root = File.join(cache_root, "files")
         @processor = Processor.new(config: config, output_root: @derivative_root)
         @sources = {}
+        @resolved_entries = {}
       end
 
       def refresh
@@ -28,7 +29,8 @@ module Bridgetown
         paths.reject! do |path|
           excludes.any? { |glob| File.fnmatch?(glob, path, File::FNM_PATHNAME | File::FNM_EXTGLOB) }
         end
-        @sources = paths.select { |path| File.file?(path) }.uniq.sort.to_h { |path| [public_src(path), path] }
+        @sources = paths.uniq.sort.filter_map { |path| canonical_source(path) }.to_h
+        @resolved_entries.clear
         self
       end
 
@@ -41,23 +43,26 @@ module Bridgetown
 
         preset_name = (preset || @config.default_preset).to_sym
         preset_config = @config.preset(preset_name)
-        existing = @manifest.find(normalized_src, preset_name)
+        resolved_key = [normalized_src, preset_name]
+        existing = @resolved_entries[resolved_key]
         return materialize(existing) if existing && derivatives_cached?(existing)
 
         key = cache_key(source_path, preset_name, preset_config)
         cached = @manifest.fetch_cached(key)
         if cached && derivatives_cached?(cached)
           @manifest.register_cached(normalized_src, preset_name, cached)
+          @resolved_entries[resolved_key] = cached
           return materialize(cached)
         end
 
         result = @processor.process(
           source_path,
-          source_id: source_id(normalized_src),
+          source_id: normalized_src.delete_prefix("/"),
           preset_name: preset_name,
           preset: preset_config
         )
         @manifest.put(normalized_src, preset_name, result, cache_key: key)
+        @resolved_entries[resolved_key] = result
         materialize(result)
       end
 
@@ -81,14 +86,15 @@ module Bridgetown
         "/#{relative.sub(%r{\Asrc/}, "")}"
       end
 
-      def source_id(src)
-        relative = src.delete_prefix("/")
-        directory = File.dirname(relative)
-        basename = File.basename(relative, ".*").gsub(/[^0-9A-Za-z_-]+/, "-").gsub(/\A-+|-+\z/, "")
-        extension = File.extname(relative).delete_prefix(".").downcase
-        digest = Digest::SHA1.hexdigest(src)[0, 8]
-        leaf = [basename.empty? ? "image" : basename, extension, digest].reject(&:empty?).join("-")
-        directory == "." ? leaf : File.join(directory, leaf)
+      def canonical_source(path)
+        return unless File.file?(path)
+
+        canonical = File.realpath(path)
+        return unless canonical == @root_dir || canonical.start_with?("#{@root_dir}/")
+
+        [public_src(path), canonical]
+      rescue Errno::ENOENT, Errno::EACCES
+        nil
       end
 
       def cache_key(source_path, preset_name, preset)
@@ -116,8 +122,6 @@ module Bridgetown
           relative_path = variant[:path].delete_prefix("/")
           cached_path = File.join(@derivative_root, relative_path)
           output_path = File.join(@output_root, relative_path)
-          next if File.exist?(output_path)
-
           FileUtils.mkdir_p(File.dirname(output_path))
           FileUtils.cp(cached_path, output_path)
         end

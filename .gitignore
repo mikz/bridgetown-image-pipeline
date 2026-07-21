@@ -1,5 +1,6 @@
 /.bundle/
 /.bridgetown-cache/
+/.image-pipeline-cache/
 /.yardoc
 /_yardoc/
 /coverage/

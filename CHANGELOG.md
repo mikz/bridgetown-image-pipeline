@@ -6,6 +6,25 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Lazy source/preset resolution with named proportional and exact-crop presets.
+- Preset selection for helpers, backgrounds, and Inspector-managed images.
+
+### Changed
+
+- Generated paths now mirror the source-relative path and extension beneath a
+  preset directory, preventing basename collisions without opaque identifiers.
+- Durable manifests and derivative bytes now live in `.image-pipeline-cache`;
+  warm deploys materialize cached bytes after Bridgetown cleans its output.
+
+### Fixed
+
+- Changed sources and quality settings replace deterministic output paths.
+- Source indexing rejects symlinks whose canonical target escapes the site.
+- Watch refreshes invalidate resolved in-memory entries.
+- Explicit Inspector presets use their own default `sizes` value.
+
 ## [0.1.1] - 2026-05-19
 
 ### Fixed

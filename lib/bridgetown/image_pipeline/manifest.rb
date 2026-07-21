@@ -34,6 +34,10 @@ module Bridgetown
         @entries[[src, preset.to_sym]]
       end
 
+      def find_by_src(src, preset: :default)
+        find(src, preset)
+      end
+
       def variants_by_width(src, preset)
         entry = find(src, preset)
         return {} unless entry

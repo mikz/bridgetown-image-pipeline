@@ -5,14 +5,14 @@
 
 ## Context
 
-The pipeline caches each source image's processed manifest under
-`.bridgetown-cache/image_pipeline/<sha1>.manifest.json`. The cache key
+The pipeline caches each source image's processed manifest and derivatives
+under `.image-pipeline-cache`. The cache key
 is a SHA1 digest computed from:
 
 1. The source file's bytes (so editing an image invalidates).
 2. A plugin-version constant (so a plugin upgrade invalidates all
    prior caches).
-3. A "config fingerprint" hash of widths, formats, output_dir, quality
+3. A config fingerprint of the selected preset, formats, output_dir, and quality
    (so config changes invalidate).
 
 In the in-repo plugin at rubycentral/rubyconf-2026, item 2 was a manually
@@ -87,5 +87,5 @@ No.
 
 - [`lib/bridgetown/image_pipeline/version.rb`](../../lib/bridgetown/image_pipeline/version.rb)
   — the single source of truth.
-- [`lib/bridgetown/image_pipeline/builder.rb`](../../lib/bridgetown/image_pipeline/builder.rb)
+- [`lib/bridgetown/image_pipeline/pipeline.rb`](../../lib/bridgetown/image_pipeline/pipeline.rb)
   — the `cache_key` method.

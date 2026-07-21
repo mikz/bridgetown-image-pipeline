@@ -50,21 +50,21 @@ Manual one-off compression has been used in the past but does not scale and does
 
 Two-stage plugin, single process, runs during `bridgetown build`.
 
-### Stage 1 — Builder
+### Stage 1 — Builder and lazy pipeline
 
-`Builders::ImagePipeline` runs on the `before :write` hook.
+The Builder indexes configured sources at `site:pre_render`; it does not encode
+them eagerly. Helpers and the Inspector share one `Pipeline#resolve` boundary.
+Resolving a `(source, preset)` pair computes a cache key from the source bytes,
+gem version, formats, quality, and preset configuration, then restores or
+generates only that pair.
 
-For each source matched by configured globs (`src/images/**/*.{jpg,jpeg,png}` by default):
+Manifests and derivative bytes live in `.image-pipeline-cache`. This directory
+is outside Bridgetown's Cleaner scope. Every build materializes requested
+derivatives into the freshly cleaned output directory, while a warm build does
+not re-encode unchanged images. Public paths mirror the canonical source path,
+including its extension, followed by the preset and variant:
 
-1. Compute cache key = `SHA1(file_bytes + plugin_version + relevant_config)`.
-2. If `.bridgetown-cache/image_pipeline/<key>.manifest.json` exists, reuse it. Skip processing.
-3. Otherwise: use `image_processing/vips` to generate derivatives at the cross-product of:
-   - Widths: `[400, 800, 1600]` (skip widths ≥ source width)
-   - Formats: `[avif, webp]` + original format
-4. Write derivatives to `output/_pipeline/images/<basename>-<width>.<ext>`.
-5. Persist a per-source manifest fragment; merge into a site-wide manifest in memory for use by Stage 2.
-
-Cache files git-ignored under `.bridgetown-cache/image_pipeline/`. CI rebuilds derivatives on cache miss; warm cache is a no-op.
+`/_bridgetown/image_pipeline/images/photo.jpg/content/760w.webp`.
 
 ### Stage 2a — `picture_tag` helper
 
@@ -133,7 +133,10 @@ image_pipeline:
     - "src/images/**/*.{jpg,jpeg,png}"
   exclude:
     - "src/images/sponsors/**"
-  widths: [400, 800, 1600]
+  presets:
+    content:
+      widths: [400, 800, 1600]
+      fit: limit
   formats: [avif, webp]
   output_dir: "_pipeline/images"
   quality:

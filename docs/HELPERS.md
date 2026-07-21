@@ -7,6 +7,7 @@ bare `<img>` tags at render time.
 
 ```erb
 <%= picture_tag "/images/hero.jpg",
+      preset: :content,
       alt: "Sandstone formations at sunset",
       sizes: "(min-width: 1024px) 50vw, 100vw",
       priority: true,
@@ -82,9 +83,7 @@ block once:
 Off by default. Enable in your initializer:
 
 ```ruby
-init "bridgetown-image-pipeline" do
-  auto_rewrite true
-end
+init "bridgetown-image-pipeline", auto_rewrite: true
 ```
 
 When on, any rendered `<img src="/images/foo.jpg">` whose source is in the
@@ -94,3 +93,7 @@ Opt-out on a per-tag basis with `data-no-pipeline`:
 ```html
 <img src="/images/exact-bytes-required.jpg" data-no-pipeline>
 ```
+
+Rendered HTML may select a non-default preset with
+`data-image-preset="avatar"`. The control attribute is removed from the final
+markup and that preset's default `sizes` value is used.

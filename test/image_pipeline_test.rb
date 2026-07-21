@@ -36,7 +36,7 @@ class ConfigTest < Minitest::Test
     config = Bridgetown::ImagePipeline::Config.from(
       widths: [320, 960],
       formats: [:webp],
-      quality: {"webp" => 85}
+      quality: { "webp" => 85 }
     )
 
     assert_equal :default, config.default_preset
@@ -89,6 +89,7 @@ class ManifestTest < Minitest::Test
 
     assert_equal 1200, @manifest.find("/images/known.jpg", :content)[:width]
     assert_equal 96, @manifest.find("/images/known.jpg", :avatar)[:width]
+    assert_equal 1200, @manifest.find_by_src("/images/known.jpg", preset: :content)[:width]
     assert_equal 1200, @manifest.fetch_cached("content")[:width]
     assert_equal :webp, @manifest.fetch_cached("content")[:variants].first[:format]
   end
@@ -133,7 +134,7 @@ class ProcessorTest < Minitest::Test
     )
 
     assert_equal [[96, 96]], result[:variants].map { |variant| [variant[:width], variant[:height]] }.uniq
-    assert(result[:variants].all? { |variant| variant[:path].include?("avatar-96x96") })
+    assert(result[:variants].all? { |variant| variant[:path].include?("/avatar/96x96") })
   end
 end
 
@@ -144,16 +145,7 @@ class PipelineTest < Minitest::Test
     FileUtils.cp(File.expand_path("fixtures/test-image.jpg", __dir__), File.join(@tmp, "src", "img", "same.jpg"))
     FileUtils.cp(File.expand_path("fixtures/test-image.webp", __dir__), File.join(@tmp, "src", "img", "nested", "same.webp"))
     @output = File.join(@tmp, "output")
-    @config = Bridgetown::ImagePipeline::Config.from(
-      source_globs: ["src/img/**/*.{jpg,webp}"],
-      formats: [:webp],
-      output_dir: "generated",
-      default_preset: :content,
-      presets: {
-        content: { widths: [400], fit: :limit },
-        avatar: { sizes: [[96, 96]], fit: :fill }
-      }
-    )
+    @config = build_config
     @pipeline = Bridgetown::ImagePipeline::Pipeline.new(
       config: @config,
       root_dir: @tmp,
@@ -172,8 +164,8 @@ class PipelineTest < Minitest::Test
     content = @pipeline.resolve("/img/same.jpg?version=1", preset: :content)
     avatar = @pipeline.resolve("/img/same.jpg", preset: :avatar)
 
-    assert(content[:variants].all? { |variant| variant[:path].include?("content-400w") })
-    assert(avatar[:variants].all? { |variant| variant[:path].include?("avatar-96x96") })
+    assert(content[:variants].all? { |variant| variant[:path].include?("/content/400w") })
+    assert(avatar[:variants].all? { |variant| variant[:path].include?("/avatar/96x96") })
   end
 
   def test_source_relative_identity_avoids_same_basename_collisions
@@ -181,8 +173,8 @@ class PipelineTest < Minitest::Test
     second = @pipeline.resolve("/img/nested/same.webp", preset: :content)
 
     refute_equal first[:variants].first[:path], second[:variants].first[:path]
-    assert_includes first[:variants].first[:path], "/img/same-jpg-"
-    assert_includes second[:variants].first[:path], "/img/nested/same-webp-"
+    assert_includes first[:variants].first[:path], "/img/same.jpg/content/"
+    assert_includes second[:variants].first[:path], "/img/nested/same.webp/content/"
   end
 
   def test_unknown_external_and_traversal_sources_are_ignored
@@ -211,17 +203,75 @@ class PipelineTest < Minitest::Test
       assert File.exist?(File.join(@output, variant[:path]))
     end
   end
+
+  def test_refresh_reprocesses_a_source_changed_during_watch
+    first = @pipeline.resolve("/img/same.jpg", preset: :content)
+    output_path = File.join(@output, first[:variants].find { |variant| variant[:format] == :webp }[:path])
+    original_bytes = File.binread(output_path)
+    changed = Vips::Image.black(2000, 1000).new_from_image([0, 255, 0])
+    changed.write_to_file(File.join(@tmp, "src", "img", "same.jpg"))
+
+    @pipeline.refresh
+    @pipeline.resolve("/img/same.jpg", preset: :content)
+
+    refute_equal original_bytes, File.binread(output_path)
+  end
+
+  def test_quality_change_replaces_an_existing_deterministic_output
+    first = @pipeline.resolve("/img/same.jpg", preset: :content)
+    output_path = File.join(@output, first[:variants].find { |variant| variant[:format] == :webp }[:path])
+    original_bytes = File.binread(output_path)
+    changed_pipeline = Bridgetown::ImagePipeline::Pipeline.new(
+      config: build_config(quality: 10),
+      root_dir: @tmp,
+      output_root: @output,
+      cache_root: File.join(@tmp, "cache")
+    ).refresh
+
+    changed_pipeline.resolve("/img/same.jpg", preset: :content)
+
+    refute_equal original_bytes, File.binread(output_path)
+  end
+
+  def test_external_symlink_is_not_indexed
+    external_dir = Dir.mktmpdir("external_image")
+    external_image = File.join(external_dir, "outside.jpg")
+    FileUtils.cp(File.expand_path("fixtures/test-image.jpg", __dir__), external_image)
+    File.symlink(external_image, File.join(@tmp, "src", "img", "escape.jpg"))
+
+    @pipeline.refresh
+
+    assert_nil @pipeline.resolve("/img/escape.jpg", preset: :content)
+  ensure
+    FileUtils.remove_entry(external_dir) if external_dir
+  end
+
+  private
+
+  def build_config(quality: 82)
+    Bridgetown::ImagePipeline::Config.from(
+      source_globs: ["src/img/**/*.{jpg,webp}"],
+      formats: [:webp],
+      output_dir: "generated",
+      quality: { webp: quality, jpeg: 85 },
+      default_preset: :content,
+      presets: {
+        content: { widths: [400], fit: :limit },
+        avatar: { sizes: [[96, 96]], fit: :fill }
+      }
+    )
+  end
 end
 
 class HelperTest < Minitest::Test
   def setup
-    config = Bridgetown::ImagePipeline::Config.from(
+    @config = Bridgetown::ImagePipeline::Config.from(
       formats: [:webp],
       presets: { avatar: { sizes: [[96, 96], [192, 192]], fit: :fill } },
       default_preset: :avatar
     )
-    pipeline = FakePipeline.new([[["/images/known.jpg", :avatar], ImagePipelineTestData.entry]].to_h)
-    @helpers = Bridgetown::ImagePipeline::Helpers.new(pipeline: pipeline, config: config)
+    @pipeline = FakePipeline.new([[["/images/known.jpg", :avatar], ImagePipelineTestData.entry]].to_h)
+    @helpers = Bridgetown::ImagePipeline::Helpers.new(pipeline: @pipeline, config: @config)
   end
 
   def test_picture_tag_resolves_selected_preset_and_preserves_attributes
@@ -249,6 +299,42 @@ class HelperTest < Minitest::Test
     assert_includes html, '<img src="/images/missing.svg"'
     refute_includes html, "<picture>"
   end
+
+  def test_priority_and_attribute_escaping_are_preserved
+    html = @helpers.picture_tag(
+      "/images/known.jpg",
+      preset: :avatar,
+      alt: %q(it's "fine"),
+      priority: true
+    )
+
+    assert_includes html, 'loading="eager"'
+    assert_includes html, 'fetchpriority="high"'
+    assert_includes html, 'alt="it&#39;s &quot;fine&quot;"'
+  end
+
+  def test_fail_on_missing_raises
+    @config.fail_on_missing = true
+
+    assert_raises(Bridgetown::ImagePipeline::MissingSourceError) do
+      @helpers.picture_tag("/images/missing.jpg", preset: :avatar)
+    end
+  end
+
+  def test_background_helpers_use_selected_preset_and_suffix
+    block = @helpers.bg_image_block("/images/known.jpg", preset: :avatar, class_suffix: "hero")
+
+    assert_equal "bg-img-known-hero", @helpers.bg_image_class("/images/known.jpg", class_suffix: "hero")
+    assert_includes block, ".bg-img-known-hero{background-image:image-set("
+    assert_includes block, "known-1200.webp"
+  end
+
+  def test_background_helper_falls_back_for_missing_source
+    output, = capture_io { @background = @helpers.bg_image_block("/images/missing.jpg", preset: :avatar) }
+
+    assert_empty output
+    assert_includes @background, "background-image:url(/images/missing.jpg)"
+  end
 end
 
 class InspectorTest < Minitest::Test
@@ -259,7 +345,7 @@ class InspectorTest < Minitest::Test
       default_preset: :content,
       presets: {
         content: { widths: [400, 1200], fit: :limit, default_sizes: "90vw" },
-        avatar: { sizes: [[96, 96]], fit: :fill }
+        avatar: { sizes: [[96, 96]], fit: :fill, default_sizes: "96px" }
       }
     )
     entries = {
@@ -293,6 +379,27 @@ class InspectorTest < Minitest::Test
 
     assert_includes output, "<picture>"
     refute_includes output, "data-image-preset"
+    assert_includes output, 'sizes="96px"'
+  end
+
+  def test_preserves_author_loading_and_priority_attributes
+    output = @inspector.rewrite(
+      '<html><body><img src="/images/known.jpg" loading="eager" decoding="sync" fetchpriority="high"></body></html>'
+    )
+
+    assert_includes output, 'loading="eager"'
+    assert_includes output, 'decoding="sync"'
+    assert_includes output, 'fetchpriority="high"'
+  end
+
+  def test_rewrite_is_disabled_by_configuration
+    inspector = Bridgetown::ImagePipeline::Inspector.new(
+      pipeline: FakePipeline.new,
+      config: Bridgetown::ImagePipeline::Config.from(auto_rewrite: false)
+    )
+    html = '<html><body><img src="/images/known.jpg"></body></html>'
+
+    assert_equal html, inspector.rewrite(html)
   end
 
   def test_skips_owned_or_ineligible_images
@@ -327,5 +434,72 @@ class BgImageSetTest < Minitest::Test
 
     assert_includes css, ".bg-img-hero{background-image:image-set(url(/hero-1200.webp) type('image/webp'))}"
     assert_includes css, "@media (max-width:640px)"
+  end
+
+  def test_empty_variants_emit_background_none
+    css = Bridgetown::ImagePipeline::BgImageSet.css(
+      class_name: "bg-img-missing",
+      variants: {},
+      breakpoints: {},
+      default_width: 1200
+    )
+
+    assert_equal ".bg-img-missing{background-image:none}", css
+  end
+
+  def test_nearest_variant_and_breakpoint_only_wrapper
+    capture_io do
+      @css = Bridgetown::ImagePipeline::BgImageSet.css(
+        class_name: "bg-img-hero",
+        variants: { 400 => { webp: "/hero-400.webp" }, 1200 => { webp: "/hero-1200.webp" } },
+        breakpoints: { 768 => 600 },
+        default_width: 1200,
+        breakpoint_only: 1024
+      )
+    end
+
+    assert @css.start_with?("@media (min-width:1024px){")
+    assert_includes @css, "/hero-400.webp"
+  end
+end
+
+require "bridgetown"
+require "bridgetown/image_pipeline/builder"
+
+class BuilderAutoRewriteHookTest < Minitest::Test
+  FakeResource = Struct.new(:site, :output, :output_ext)
+  FakeSite = Struct.new(:root_dir) do
+    def in_dest_dir
+      File.join(root_dir, "output")
+    end
+  end
+
+  def setup
+    @tmp = Dir.mktmpdir("image_pipeline_builder")
+    @site = FakeSite.new(@tmp)
+    config = Bridgetown::ImagePipeline::Config.from(auto_rewrite: true)
+    @builder = Bridgetown::ImagePipeline::Builder.allocate
+    @builder.instance_variable_set(:@site, @site)
+    @builder.instance_variable_set(:@config, config)
+    @builder.instance_variable_set(:@pipeline, FakePipeline.new)
+  end
+
+  def teardown
+    FileUtils.remove_entry(@tmp)
+    Bridgetown::Hooks.instance_variable_get(:@registry)&.each_value do |hooks|
+      hooks.reject! { |hook| hook.reloadable == false }
+    end
+  end
+
+  def test_post_render_hook_ignores_resources_from_another_site
+    @builder.register_auto_rewrite_hooks!
+    html = '<html><body><img src="/images/known.jpg"></body></html>'
+    resource = FakeResource.new(FakeSite.new(Dir.mktmpdir("other_site")), html, ".html")
+
+    Bridgetown::Hooks.trigger(:resources, :post_render, resource)
+
+    assert_equal html, resource.output
+  ensure
+    FileUtils.remove_entry(resource.site.root_dir) if resource
   end
 end
