@@ -33,12 +33,18 @@ end
 
 class ConfigTest < Minitest::Test
   def test_builds_default_limit_preset_from_legacy_widths
-    config = Bridgetown::ImagePipeline::Config.from(widths: [320, 960], formats: [:webp])
+    config = Bridgetown::ImagePipeline::Config.from(
+      widths: [320, 960],
+      formats: [:webp],
+      quality: {"webp" => 85}
+    )
 
     assert_equal :default, config.default_preset
     assert_equal [320, 960], config.preset(:default)[:widths]
     assert_equal :limit, config.preset(:default)[:fit]
     assert_equal [:webp], config.formats
+    assert_equal 85, config.quality[:webp]
+    refute config.quality.key?("webp")
   end
 
   def test_normalizes_named_limit_and_fill_presets

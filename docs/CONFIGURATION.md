@@ -21,10 +21,10 @@ Sources are indexed before rendering, but derivatives are generated only when
 `picture_tag`, `bg_image_block`, or the Inspector resolves a source and preset.
 
 ```ruby
-init "bridgetown-image-pipeline" do
-  formats [:webp]
-  default_preset :content
-  presets(
+init "bridgetown-image-pipeline",
+  formats: [:webp],
+  default_preset: :content,
+  presets: {
     content: {
       widths: [480, 760, 1200],
       fit: :limit,
@@ -34,8 +34,7 @@ init "bridgetown-image-pipeline" do
       sizes: [[96, 96], [192, 192]],
       fit: :fill
     }
-  )
-end
+  }
 ```
 
 `fit: :limit` preserves the source ratio. `fit: :fill` crops from the centre

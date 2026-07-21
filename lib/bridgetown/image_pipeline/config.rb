@@ -27,7 +27,8 @@ module Bridgetown
       def self.from(**overrides)
         merged = DEFAULTS.merge(overrides)
         merged[:formats] = Array(merged[:formats]).map(&:to_sym)
-        merged[:quality] = DEFAULTS[:quality].merge(merged[:quality] || {})
+        quality = (merged[:quality] || {}).to_h.transform_keys(&:to_sym)
+        merged[:quality] = DEFAULTS[:quality].merge(quality)
         merged[:default_preset] = merged[:default_preset].to_sym
         merged[:presets] = normalize_presets(merged[:presets] || {
                                                merged[:default_preset] => { widths: merged[:widths], fit: :limit }
