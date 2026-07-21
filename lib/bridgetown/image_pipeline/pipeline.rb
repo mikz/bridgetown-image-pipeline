@@ -19,7 +19,6 @@ module Bridgetown
         @derivative_root = File.join(cache_root, "files")
         @processor = Processor.new(config: config, output_root: @derivative_root)
         @sources = {}
-        @resolved_entries = {}
       end
 
       def refresh
@@ -30,7 +29,7 @@ module Bridgetown
           excludes.any? { |glob| File.fnmatch?(glob, path, File::FNM_PATHNAME | File::FNM_EXTGLOB) }
         end
         @sources = paths.uniq.sort.filter_map { |path| canonical_source(path) }.to_h
-        @resolved_entries.clear
+        @manifest.clear
         self
       end
 
@@ -43,15 +42,13 @@ module Bridgetown
 
         preset_name = (preset || @config.default_preset).to_sym
         preset_config = @config.preset(preset_name)
-        resolved_key = [normalized_src, preset_name]
-        existing = @resolved_entries[resolved_key]
+        existing = @manifest.find(normalized_src, preset_name)
         return materialize(existing) if existing && derivatives_cached?(existing)
 
         key = cache_key(source_path, preset_name, preset_config)
         cached = @manifest.fetch_cached(key)
         if cached && derivatives_cached?(cached)
           @manifest.register_cached(normalized_src, preset_name, cached)
-          @resolved_entries[resolved_key] = cached
           return materialize(cached)
         end
 
@@ -62,7 +59,6 @@ module Bridgetown
           preset: preset_config
         )
         @manifest.put(normalized_src, preset_name, result, cache_key: key)
-        @resolved_entries[resolved_key] = result
         materialize(result)
       end
 

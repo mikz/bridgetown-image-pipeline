@@ -84,8 +84,12 @@ class ManifestTest < Minitest::Test
 
   def test_entries_are_preset_aware_and_cache_round_trips
     entry = ImagePipelineTestData.entry
+    avatar_entry = entry.merge(
+      width: 96,
+      variants: entry[:variants].map { |variant| variant.merge(path: variant[:path].sub("known-", "known-avatar-")) }
+    )
     @manifest.put("/images/known.jpg", :content, entry, cache_key: "content")
-    @manifest.put("/images/known.jpg", :avatar, entry.merge(width: 96), cache_key: "avatar")
+    @manifest.put("/images/known.jpg", :avatar, avatar_entry, cache_key: "avatar")
 
     assert_equal 1200, @manifest.find("/images/known.jpg", :content)[:width]
     assert_equal 96, @manifest.find("/images/known.jpg", :avatar)[:width]
@@ -217,6 +221,27 @@ class PipelineTest < Minitest::Test
     refute_equal original_bytes, File.binread(output_path)
   end
 
+  def test_source_cache_does_not_roll_back_to_stale_derivative_bytes
+    source_path = File.join(@tmp, "src", "img", "same.jpg")
+    original_source = File.binread(source_path)
+    entry = @pipeline.resolve("/img/same.jpg", preset: :content)
+    output_path = File.join(@output, entry[:variants].find { |variant| variant[:format] == :webp }[:path])
+    first_sha = Digest::SHA256.file(output_path).hexdigest
+
+    Vips::Image.black(2000, 1000).new_from_image([0, 255, 0]).write_to_file(source_path)
+    @pipeline.refresh
+    @pipeline.resolve("/img/same.jpg", preset: :content)
+    second_sha = Digest::SHA256.file(output_path).hexdigest
+
+    File.binwrite(source_path, original_source)
+    @pipeline.refresh
+    @pipeline.resolve("/img/same.jpg", preset: :content)
+    third_sha = Digest::SHA256.file(output_path).hexdigest
+
+    refute_equal first_sha, second_sha
+    assert_equal first_sha, third_sha
+  end
+
   def test_quality_change_replaces_an_existing_deterministic_output
     first = @pipeline.resolve("/img/same.jpg", preset: :content)
     output_path = File.join(@output, first[:variants].find { |variant| variant[:format] == :webp }[:path])
@@ -231,6 +256,24 @@ class PipelineTest < Minitest::Test
     changed_pipeline.resolve("/img/same.jpg", preset: :content)
 
     refute_equal original_bytes, File.binread(output_path)
+  end
+
+  def test_quality_cache_does_not_roll_back_to_stale_derivative_bytes
+    output_path = nil
+    shas = [82, 10, 82].map do |quality|
+      pipeline = Bridgetown::ImagePipeline::Pipeline.new(
+        config: build_config(quality: quality),
+        root_dir: @tmp,
+        output_root: @output,
+        cache_root: File.join(@tmp, "cache")
+      ).refresh
+      entry = pipeline.resolve("/img/same.jpg", preset: :content)
+      output_path ||= File.join(@output, entry[:variants].find { |variant| variant[:format] == :webp }[:path])
+      Digest::SHA256.file(output_path).hexdigest
+    end
+
+    refute_equal shas[0], shas[1]
+    assert_equal shas[0], shas[2]
   end
 
   def test_external_symlink_is_not_indexed
@@ -477,11 +520,29 @@ class BuilderAutoRewriteHookTest < Minitest::Test
   def setup
     @tmp = Dir.mktmpdir("image_pipeline_builder")
     @site = FakeSite.new(@tmp)
-    config = Bridgetown::ImagePipeline::Config.from(auto_rewrite: true)
+    FileUtils.mkdir_p(File.join(@tmp, "src", "images"))
+    FileUtils.cp(
+      File.expand_path("fixtures/test-image.jpg", __dir__),
+      File.join(@tmp, "src", "images", "known.jpg")
+    )
+    config = Bridgetown::ImagePipeline::Config.from(
+      auto_rewrite: true,
+      source_globs: ["src/images/**/*.jpg"],
+      formats: [:webp],
+      presets: { default: { widths: [400], fit: :limit } }
+    )
     @builder = Bridgetown::ImagePipeline::Builder.allocate
     @builder.instance_variable_set(:@site, @site)
     @builder.instance_variable_set(:@config, config)
-    @builder.instance_variable_set(:@pipeline, FakePipeline.new)
+    @builder.instance_variable_set(
+      :@pipeline,
+      Bridgetown::ImagePipeline::Pipeline.new(
+        config: config,
+        root_dir: @tmp,
+        output_root: @site.in_dest_dir,
+        cache_root: File.join(@tmp, "cache")
+      ).refresh
+    )
   end
 
   def teardown
@@ -501,5 +562,29 @@ class BuilderAutoRewriteHookTest < Minitest::Test
     assert_equal html, resource.output
   ensure
     FileUtils.remove_entry(resource.site.root_dir) if resource
+  end
+
+  def test_post_render_hook_rewrites_html_for_its_site
+    @builder.register_auto_rewrite_hooks!
+    resource = FakeResource.new(
+      @site,
+      '<html><body><img src="/images/known.jpg" alt="Known"></body></html>',
+      ".html"
+    )
+
+    Bridgetown::Hooks.trigger(:resources, :post_render, resource)
+
+    assert_includes resource.output, "<picture>"
+    assert_includes resource.output, "/_bridgetown/image_pipeline/images/known.jpg/default/400w.webp"
+  end
+
+  def test_post_render_hook_leaves_non_html_output_untouched
+    @builder.register_auto_rewrite_hooks!
+    output = '<img src="/images/known.jpg">'
+    resource = FakeResource.new(@site, output, ".xml")
+
+    Bridgetown::Hooks.trigger(:resources, :post_render, resource)
+
+    assert_equal output, resource.output
   end
 end

@@ -14,6 +14,7 @@ module Bridgetown
 
       def put(src, preset, entry, cache_key:)
         symbolized = deep_symbolize(entry)
+        invalidate_conflicts(symbolized[:variants].map { |variant| variant[:path] }, except: cache_key)
         @entries[[src, preset.to_sym]] = symbolized
         File.write(cache_file(cache_key), JSON.generate(symbolized))
         symbolized
@@ -32,6 +33,10 @@ module Bridgetown
 
       def find(src, preset)
         @entries[[src, preset.to_sym]]
+      end
+
+      def clear
+        @entries.clear
       end
 
       def find_by_src(src, preset: :default)
@@ -55,6 +60,18 @@ module Bridgetown
 
       def cache_file(cache_key)
         File.join(@cache_dir, "#{cache_key}.manifest.json")
+      end
+
+      def invalidate_conflicts(paths, except:)
+        conflicting = paths.to_h { |path| [path, true] }
+        Dir.glob(File.join(@cache_dir, "*.manifest.json")).each do |path|
+          next if path == cache_file(except)
+
+          entry = deep_symbolize(JSON.parse(File.read(path)))
+          FileUtils.rm_f(path) if entry[:variants].any? { |variant| conflicting[variant[:path]] }
+        rescue JSON::ParserError
+          FileUtils.rm_f(path)
+        end
       end
 
       def deep_symbolize(obj)
